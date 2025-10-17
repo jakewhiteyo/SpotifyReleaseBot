@@ -11,14 +11,10 @@
   },
   "dependencies": {
     "next": "14.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "twitter-api-v2": "^1.27.0"
   },
   "devDependencies": {
     "@types/node": "^20.8.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
     "eslint": "^8.0.0",
     "eslint-config-next": "14.0.0",
     "typescript": "^5.2.0"
