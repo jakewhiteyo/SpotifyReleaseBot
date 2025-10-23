@@ -30,7 +30,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ message: "No releases in payload" });
     }
 
-    const header = "🎵 New Release Detected\n\n";
+    const header = "New Spotify Release Detected\n\n";
     const footer = "\n\nPowered by Spotify Webhooks";
 
     // Send one tweet per release
@@ -43,7 +43,10 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       const releaseType = release.album_type || release.type;
 
       // Build tweet text for this release
-      const tweetText = `${header}${release.name} - ${artists} (${releaseType})${footer}`;
+      let tweetText = `${header}${release.name} - ${artists} (${releaseType})${footer}`;
+      // Add a link to the release on Spotify
+      const spotifyLink = `https://open.spotify.com/album/${release.id}`;
+      tweetText += `\n\n${spotifyLink}`;
 
       // Upload image for this release
       let mediaId: string | undefined;
