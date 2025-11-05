@@ -1,5 +1,8 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { TwitterApi } from "twitter-api-v2";
+import crypto from "crypto";
+import { request } from "http";
+import { buffer } from "micro";
 
 const twitterClient = new TwitterApi({
   appKey: process.env.X_API_KEY!,
@@ -8,7 +11,47 @@ const twitterClient = new TwitterApi({
   accessSecret: process.env.X_API_ACCESS_TOKEN_SECRET!,
 });
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+// Disable body parsing to get raw body for signature verification
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+function verifyWebhookSignature(
+  payload: string,
+  signature: string,
+  timestamp: string
+): boolean {
+  try {
+    // Extract the signature value (remove 'sha256=' prefix)
+    const sigValue = signature.replace("sha256=", "");
+
+    // Reconstruct the signed payload with timestamp (same as sender does)
+    const signedPayload = `${timestamp}.${payload}`;
+
+    // Generate HMAC-SHA256 using the secret
+    const expectedSig = crypto
+      .createHmac("sha256", process.env.SPOTIFY_WEBHOOKS_SECRET!)
+      .update(signedPayload)
+      .digest("hex");
+
+    // Compare signatures (constant-time comparison would be ideal in production)
+    if (expectedSig === sigValue) {
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error("Error verifying webhook signature:", error);
+    return false;
+  }
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   const { method } = req;
 
   switch (method) {
@@ -20,10 +63,32 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 async function handlePost(req: NextApiRequest, res: NextApiResponse) {
-  const { body } = req;
-  console.log("Webhook received", body);
-
   try {
+    // Get raw body first - BEFORE accessing any headers or body
+    const rawBody = await buffer(req);
+    const bodyString = rawBody.toString("utf8");
+
+    // Get signature and timestamp from headers
+    const signature = req.headers["x-webhook-signature"] as string;
+    const timestamp = req.headers["x-webhook-timestamp"] as string;
+
+    if (!signature) {
+      console.error("No signature provided in webhook");
+      return res.status(401).json({ message: "No signature provided" });
+    }
+
+    if (!timestamp) {
+      console.error("No timestamp provided in webhook");
+      return res.status(401).json({ message: "No timestamp provided" });
+    }
+
+    if (!verifyWebhookSignature(bodyString, signature, timestamp)) {
+      console.error("Invalid webhook signature");
+      return res.status(401).json({ message: "Invalid signature" });
+    }
+
+    // Parse body AFTER verification
+    const body = JSON.parse(bodyString);
     const { event, releases } = body;
 
     if (!releases || releases.length === 0) {
@@ -67,7 +132,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
             imageError
           );
         }
-    }
+      }
 
       // Send tweet for this release
       const tweetOptions: any = { text: tweetText };
