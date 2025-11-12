@@ -108,10 +108,11 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       const releaseType = release.album_type || release.type;
 
       // Build tweet text for this release
-      let tweetText = `${header}${release.name} - ${artists} (${releaseType})${footer}`;
+      let tweetText = `${header}${release.name} - ${artists} (${releaseType})`;
       // Add a link to the release on Spotify
       const spotifyLink = `https://open.spotify.com/album/${release.id}`;
       tweetText += `\n\n${spotifyLink}`;
+      tweetText += footer;
 
       // Upload image for this release
       let mediaId: string | undefined;
