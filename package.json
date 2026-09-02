@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test:handles": "tsx scripts/test-handles.ts",
+    "test:webhook": "tsx scripts/send-webhook.ts"
   },
   "dependencies": {
     "micro": "^10.0.1",
@@ -19,6 +21,7 @@
     "@types/react": "^18.3.26",
     "eslint": "^8.0.0",
     "eslint-config-next": "14.0.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.2.0"
   },
   "engines": {

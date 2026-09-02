@@ -1,8 +1,9 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { TwitterApi } from "twitter-api-v2";
+import { ApiResponseError, TwitterApi } from "twitter-api-v2";
 import crypto from "crypto";
-import { request } from "http";
 import { buffer } from "micro";
+import { resolveArtistHandles, type ResolvedArtist } from "../../lib/artistHandles";
+import { buildTweetText } from "../../lib/tweetText";
 
 const twitterClient = new TwitterApi({
   appKey: process.env.X_API_KEY!,
@@ -11,11 +12,13 @@ const twitterClient = new TwitterApi({
   accessSecret: process.env.X_API_ACCESS_TOKEN_SECRET!,
 });
 
-// Disable body parsing to get raw body for signature verification
+// Disable body parsing to get raw body for signature verification.
+// maxDuration covers the artist handle lookups (bounded per release by HANDLE_LOOKUP_BUDGET_MS).
 export const config = {
   api: {
     bodyParser: false,
   },
+  maxDuration: 60,
 };
 
 function verifyWebhookSignature(
@@ -95,24 +98,41 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ message: "No releases in payload" });
     }
 
-    const header = "New Spotify Release Detected\n\n";
-    const footer = "\n\nPowered by Spotify Webhooks";
+    const dryRun = process.env.DRY_RUN === "1";
 
     // Send one tweet per release
     const tweetIds: string[] = [];
 
     for (let i = 0; i < releases.length; i++) {
       const release = releases[i];
-      const artists =
-        release.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist";
       const releaseType = release.album_type || release.type;
 
-      // Build tweet text for this release
-      let tweetText = `${header}${release.name} - ${artists} (${releaseType})`;
-      // Add a link to the release on Spotify
+      // Look up and verify X handles so the artists get @-mentioned when possible
+      const artistInputs = (release.artists ?? []).map((a: any) => ({
+        id: String(a?.id ?? ""),
+        name: String(a?.name ?? ""),
+      }));
+      let resolvedArtists: ResolvedArtist[];
+      try {
+        resolvedArtists = await resolveArtistHandles(twitterClient, artistInputs);
+      } catch (handleError) {
+        console.error("[handles] resolver threw; using bare names", handleError);
+        resolvedArtists = artistInputs.map((a: { id: string; name: string }) => ({
+          ...a,
+          handle: null,
+          source: "none" as const,
+        }));
+      }
+
+      // Build tweet text for this release (includes the Spotify link and footer)
       const spotifyLink = `https://open.spotify.com/album/${release.id}`;
-      tweetText += `\n\n${spotifyLink}`;
-      tweetText += footer;
+      const tweetText = buildTweetText(release.name, resolvedArtists, releaseType, spotifyLink);
+
+      if (dryRun) {
+        console.log(`[dry-run] tweet ${i + 1}:\n${tweetText}`);
+        tweetIds.push("dry-run");
+        continue;
+      }
 
       // Upload image for this release
       let mediaId: string | undefined;
@@ -149,11 +169,17 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     }
 
     return res.status(200).json({
-      message: "Tweet(s) sent",
+      message: dryRun ? "Dry run, nothing posted" : "Tweet(s) sent",
       tweetIds: tweetIds,
       releasesCount: releases.length,
+      dryRun,
     });
   } catch (error) {
+    if (error instanceof ApiResponseError) {
+      console.error(
+        `X API error: status=${error.code} body=${JSON.stringify(error.data)}`
+      );
+    }
     console.error("Error processing webhook", error);
     return res.status(500).json({
       message: "Error processing webhook",
