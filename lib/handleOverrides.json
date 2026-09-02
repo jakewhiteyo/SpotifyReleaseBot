@@ -1,0 +1,4 @@
+{
+  "_comment": "Keyed by Spotify artist id. Set handle to null to block tagging for that artist. Handles here skip the lookups but are still verified against X. Keys starting with _ are ignored.",
+  "_example": { "name": "Example Artist", "handle": null }
+}
