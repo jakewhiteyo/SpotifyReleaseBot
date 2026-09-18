@@ -14,11 +14,12 @@ For every artist on a release the bot tries to find their X handle and renders
 2. Wikidata (Spotify artist ID property P1902 -> X username property P2002)
 3. MusicBrainz (Spotify URL -> artist -> twitter/x link)
 
-Every candidate is verified with the X API (`GET /2/users/by/username`, about
-$0.01 per call on pay-per-use) before it is used. If nothing verifies, the bare
-artist name is used. Lookups share a time budget per release
-(`HANDLE_LOOKUP_BUDGET_MS`, default 8000) and any failure falls back to the bare
-name; a lookup problem never blocks the tweet.
+The first source with a handle wins; handles are not checked against the X API,
+so no X credits are spent on lookups. If no source has one, the bare artist name
+is used. Lookups share a time budget per release (`HANDLE_LOOKUP_BUDGET_MS`,
+default 8000) and any failure falls back to the bare name; a lookup problem never
+blocks the tweet. If a source points at a wrong or renamed account, pin the right
+handle in the override file.
 
 Each artist logs one line in Vercel like
 `[handles] {"id":"...","name":"...","handle":"...","source":"wikidata","ms":1234}`.
@@ -34,14 +35,14 @@ Each artist logs one line in Vercel like
 }
 ```
 
-`handle: null` blocks tagging for that artist. A handle in the file skips the
-lookups but is still verified against X. Keys starting with `_` are ignored.
+`handle: null` blocks tagging for that artist. A handle in the file is used as-is
+and skips the lookups. Keys starting with `_` are ignored.
 
 ## Environment variables
 
 | Name | Purpose |
 |---|---|
-| `X_API_KEY`, `X_API_KEY_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_ACCESS_TOKEN_SECRET` | OAuth 1.0a user context for posting and verifying handles |
+| `X_API_KEY`, `X_API_KEY_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_ACCESS_TOKEN_SECRET` | OAuth 1.0a user context for posting |
 | `SPOTIFY_WEBHOOKS_SECRET` | Signing secret of the Spotify Webhooks subscription |
 | `HANDLE_LOOKUP_BUDGET_MS` | Optional. Per-release lookup budget, default 8000 |
 | `DRY_RUN` | Optional. Set to `1` to log the tweet instead of posting it |
@@ -52,11 +53,11 @@ Predict the X handle for one or more Spotify artist ids or artist URLs:
 
 ```
 npm run test:handles -- 2p1fiYHYiXz9qi0JJyxBzN
-npm run test:handles -- --no-verify https://open.spotify.com/artist/2p1fiYHYiXz9qi0JJyxBzN
+npm run test:handles -- https://open.spotify.com/artist/2p1fiYHYiXz9qi0JJyxBzN
 ```
 
-`--no-verify` skips the X API call and costs nothing. The script also runs a
-self-check of the 280-character tweet guard.
+This only calls Wikidata and MusicBrainz and costs nothing. The script also runs
+a self-check of the 280-character tweet guard.
 
 Send a signed test webhook to a local instance without posting:
 

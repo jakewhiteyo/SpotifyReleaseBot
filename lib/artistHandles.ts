@@ -1,4 +1,3 @@
-import { ApiResponseError, type TwitterApi } from "twitter-api-v2";
 import overridesJson from "./handleOverrides.json";
 
 export type ArtistInput = { id: string; name: string };
@@ -6,7 +5,7 @@ export type HandleSource = "override" | "wikidata" | "musicbrainz" | "none" | "b
 export type ResolvedArtist = {
   id: string;
   name: string;
-  /** Verified X username, or null to fall back to the bare artist name. */
+  /** X username from the first source that had one, or null to fall back to the bare artist name. */
   handle: string | null;
   source: HandleSource;
 };
@@ -119,54 +118,27 @@ export async function lookupMusicBrainz(
   return null;
 }
 
-/**
- * Confirms the username exists on X and returns its canonical casing.
- * X answers HTTP 200 with `errors[]` and no `data` for an unknown user, so an
- * exception is not the only failure path.
- */
-export async function verifyHandle(client: TwitterApi, handle: string): Promise<string | null> {
-  try {
-    const res = await client.v2.userByUsername(handle);
-    if (res.data?.username) return res.data.username;
-    console.warn(`[handles] X has no user @${handle}:`, JSON.stringify(res.errors ?? null));
-    return null;
-  } catch (error) {
-    if (error instanceof ApiResponseError) {
-      console.error(
-        `[handles] X API error verifying @${handle}: status=${error.code} body=${JSON.stringify(error.data)}`
-      );
-    } else {
-      console.error(`[handles] request error verifying @${handle}:`, error);
-    }
-    return null;
-  }
-}
-
 export type Prediction = {
   id: string;
   /** undefined = no override entry, null = tagging blocked. */
   override: string | null | undefined;
   wikidata: string | null | "error";
   musicbrainz: string | null | "error";
-  /** First candidate in priority order, before any X verification. */
+  /** First handle in priority order: override, then Wikidata, then MusicBrainz. */
   predicted: string | null;
-  /** Handle verified against X, or null if verification was skipped or failed. */
-  verified: string | null;
   source: HandleSource;
 };
 
 /**
  * Runs every source for one artist id and reports what each said. Meant for the
  * test script; the webhook path uses resolveArtistHandles, which stops early.
- * Pass a null client to skip X verification (free).
  */
-export async function predictHandle(
-  spotifyId: string,
-  client: TwitterApi | null,
-  budgetMs = 15000
-): Promise<Prediction> {
+export async function predictHandle(spotifyId: string, budgetMs = 15000): Promise<Prediction> {
   const deadline = Date.now() + budgetMs;
   const override = overrides[spotifyId]?.handle;
+  if (override === null) {
+    return { id: spotifyId, override, wikidata: null, musicbrainz: null, predicted: null, source: "blocked" };
+  }
   const safe = async (fn: () => Promise<string | null>): Promise<string | null | "error"> => {
     try {
       return await fn();
@@ -177,9 +149,6 @@ export async function predictHandle(
       return "error";
     }
   };
-  if (override === null) {
-    return { id: spotifyId, override, wikidata: null, musicbrainz: null, predicted: null, verified: null, source: "blocked" };
-  }
   const wikidata = await safe(() => lookupWikidata(spotifyId, deadline));
   const musicbrainz = await safe(() => lookupMusicBrainz(spotifyId, deadline));
 
@@ -188,68 +157,53 @@ export async function predictHandle(
     ["wikidata", wikidata],
     ["musicbrainz", musicbrainz],
   ];
-  const candidates = ordered.filter(
-    ([, h]) => typeof h === "string" && h !== "error"
-  ) as Array<[HandleSource, string]>;
-  const predicted = candidates[0]?.[1] ?? null;
-  const base = { id: spotifyId, override, wikidata, musicbrainz, predicted };
-
-  if (!client) return { ...base, verified: null, source: candidates[0]?.[0] ?? "none" };
-
-  const tried = new Set<string>();
-  for (const [source, handle] of candidates) {
-    if (tried.has(handle.toLowerCase())) continue;
-    tried.add(handle.toLowerCase());
-    const verified = await verifyHandle(client, handle);
-    if (verified) return { ...base, verified, source };
-  }
-  return { ...base, verified: null, source: "none" };
+  const first = ordered.find(([, h]) => typeof h === "string" && h !== "error") as
+    | [HandleSource, string]
+    | undefined;
+  return {
+    id: spotifyId,
+    override,
+    wikidata,
+    musicbrainz,
+    predicted: first?.[1] ?? null,
+    source: first?.[0] ?? "none",
+  };
 }
 
-async function resolveOne(client: TwitterApi, artist: ArtistInput, deadline: number): Promise<ResolvedArtist> {
+async function resolveOne(artist: ArtistInput, deadline: number): Promise<ResolvedArtist> {
   const base = { id: artist.id, name: artist.name };
   if (!SPOTIFY_ID_RE.test(artist.id)) return { ...base, handle: null, source: "none" };
 
   const override = overrides[artist.id];
   if (override !== undefined) {
     if (override.handle === null) return { ...base, handle: null, source: "blocked" };
-    const verified = await verifyHandle(client, override.handle);
-    if (verified) return { ...base, handle: verified, source: "override" };
-    console.error(
-      `[handles] OVERRIDE FAILED verification for ${artist.name} (${artist.id}) -> @${override.handle}; trying lookups`
-    );
+    if (HANDLE_RE.test(override.handle)) return { ...base, handle: override.handle, source: "override" };
+    console.error(`[handles] OVERRIDE INVALID for ${artist.name} (${artist.id}): "${override.handle}"; trying lookups`);
   }
 
   const sources: Array<[HandleSource, (id: string, d: number) => Promise<string | null>]> = [
     ["wikidata", lookupWikidata],
     ["musicbrainz", lookupMusicBrainz],
   ];
-  const tried = new Set<string>();
   for (const [source, lookup] of sources) {
     if (Date.now() >= deadline) {
       console.warn(`[handles] budget exhausted before ${source} for ${artist.name}`);
       break;
     }
-    let candidate: string | null = null;
     try {
-      candidate = await lookup(artist.id, deadline);
+      const handle = await lookup(artist.id, deadline);
+      if (handle) return { ...base, handle, source };
     } catch (e: any) {
       console.warn(
         `[handles] ${source} failed for ${artist.name} (${artist.id}): ${e?.name === "TimeoutError" ? "timeout" : e?.message}`
       );
     }
-    if (!candidate || tried.has(candidate.toLowerCase())) continue;
-    tried.add(candidate.toLowerCase());
-    const verified = await verifyHandle(client, candidate);
-    if (verified) return { ...base, handle: verified, source };
-    console.warn(`[handles] ${source} candidate @${candidate} for ${artist.name} not verified; trying next source`);
   }
   return { ...base, handle: null, source: "none" };
 }
 
 /** Resolves handles for one release's artists under a shared time budget. Never throws. */
 export async function resolveArtistHandles(
-  client: TwitterApi,
   artists: ArtistInput[],
   budgetMs = Number(process.env.HANDLE_LOOKUP_BUDGET_MS ?? 8000)
 ): Promise<ResolvedArtist[]> {
@@ -259,7 +213,7 @@ export async function resolveArtistHandles(
     const started = Date.now();
     let resolved: ResolvedArtist;
     try {
-      resolved = await resolveOne(client, artist, deadline);
+      resolved = await resolveOne(artist, deadline);
     } catch (error) {
       console.error(`[handles] resolver threw for ${artist.name}; using bare name`, error);
       resolved = { id: artist.id, name: artist.name, handle: null, source: "none" };

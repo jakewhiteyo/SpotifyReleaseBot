@@ -114,7 +114,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       }));
       let resolvedArtists: ResolvedArtist[];
       try {
-        resolvedArtists = await resolveArtistHandles(twitterClient, artistInputs);
+        resolvedArtists = await resolveArtistHandles(artistInputs);
       } catch (handleError) {
         console.error("[handles] resolver threw; using bare names", handleError);
         resolvedArtists = artistInputs.map((a: { id: string; name: string }) => ({
@@ -124,8 +124,9 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         }));
       }
 
-      // Build tweet text for this release (includes the Spotify link and footer)
-      const spotifyLink = `https://open.spotify.com/album/${release.id}`;
+      // Build tweet text for this release (includes the Spotify link and footer).
+      // release.id is the platform's internal id; spotify_id is the real Spotify album id.
+      const spotifyLink = `https://open.spotify.com/album/${release.spotify_id}`;
       const tweetText = buildTweetText(release.name, resolvedArtists, releaseType, spotifyLink);
 
       if (dryRun) {
